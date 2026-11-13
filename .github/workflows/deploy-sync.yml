@@ -1,0 +1,67 @@
+name: Sincronizar con DeViinQ/renaultFinder y desplegar
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  sync-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Leer último commit del repo upstream
+        id: upstream
+        run: |
+          SHA=$(curl -s https://api.github.com/repos/DeViinQ/renaultFinder/commits/main | jq -r .sha)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Último commit upstream: $SHA"
+
+      - name: Restaurar marca del último SHA desplegado
+        uses: actions/cache/restore@v4
+        with:
+          path: cache-marker.txt
+          key: deployed-${{ steps.upstream.outputs.sha }}
+          restore-keys: deployed-
+
+      - name: ¿Hay cambios nuevos?
+        id: check
+        env:
+          SHA: ${{ steps.upstream.outputs.sha }}
+        run: |
+          if [ -f cache-marker.txt ] && grep -q "$SHA" cache-marker.txt; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Sin cambios nuevos, no se despliega."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Cambios detectados, se despliega."
+          fi
+
+      - name: Checkout del repo upstream
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: DeViinQ/renaultFinder
+          ref: main
+          fetch-depth: 0
+
+      - name: Deploy a Vercel (producción)
+        if: steps.check.outputs.skip != 'true'
+        run: npx --yes vercel@latest deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_ORG_ID: team_AwiHs5HsJjn6GOkeHZRaPi8Q
+          VERCEL_PROJECT_ID: prj_49fMBOF3loRBeQWxIwI3UCh1XiVm
+
+      - name: Guardar SHA desplegado
+        if: steps.check.outputs.skip != 'true'
+        run: echo "${{ steps.upstream.outputs.sha }}" > cache-marker.txt
+
+      - name: Actualizar cache
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: cache-marker.txt
+          key: deployed-${{ steps.upstream.outputs.sha }}
